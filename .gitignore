@@ -1,0 +1,18 @@
+/archive (1).zip
+/Cleaned_Dataset
+/diabetes_filenames.txt
+/DoubleCNN_TongueVision.pth
+/DoubleTransformer_TongueVision.pth
+/env
+/Final_Segmented_Train_Dataset
+/Final_Segmented_Val_Dataset
+/Kaggle Test Dataset
+/Kaggle_Cleaned_Dataset
+/kaggle_images_found.txt
+/nondiabetes_filenames.txt
+/non_diabetes_filenames.txt
+/sam_vit_b_01ec64.pth
+/TongueVision.pth
+/TongueVision_Mendeley_TrainVal
+/TongueVision_Stabilized_v2.pth
+/V1_TongueVision_Stabilized.pth
