@@ -11,7 +11,8 @@ from tqdm import tqdm  # For progress bars (pip install tqdm)
 # ==============================================================================
 # 1. CONFIGURATION & HYPERPARAMETERS
 # ==============================================================================
-DATASET_ROOT = r"C:\Users\User\Personal Projects\TongueVision\TongueVision_Mendeley_TrainVal"
+TRAIN_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Train_Dataset"
+VAL_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Val_Dataset"
 
 # Hardware & Training Config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -168,9 +169,8 @@ if __name__ == "__main__":
     print(f"Batch Size: {BATCH_SIZE}")
     
     # --- Data Loading ---
-    if not os.path.exists(DATASET_ROOT):
-        print(f"ERROR: Dataset path not found: {DATASET_ROOT}")
-        print("Please edit the 'DATASET_ROOT' variable in the script.")
+    if not os.path.exists(TRAIN_DIR) or not os.path.exists(VAL_DIR):
+        print(f"ERROR: One of the paths not found: \n{TRAIN_DIR}\n{VAL_DIR}")
         exit()
 
     # Data Transforms
@@ -179,23 +179,15 @@ if __name__ == "__main__":
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-
-    if not os.path.exists(os.path.join(DATASET_ROOT, 'train')):
-        print(f"ERROR: 'train' folder not found in {DATASET_ROOT}")
-        exit()
-    if not os.path.exists(os.path.join(DATASET_ROOT, 'val')):
-        print(f"ERROR: 'val' folder not found in {DATASET_ROOT}")
-        exit()
     
-    train_dataset = datasets.ImageFolder(os.path.join(DATASET_ROOT, 'train'), transform=data_transforms)
-    val_dataset = datasets.ImageFolder(os.path.join(DATASET_ROOT, 'val'), transform=data_transforms)
+    train_dataset = datasets.ImageFolder(TRAIN_DIR, transform=data_transforms)
+    val_dataset = datasets.ImageFolder(VAL_DIR, transform=data_transforms)
 
     detected_classes = len(train_dataset.classes)
     print(f"Detected Classes: {train_dataset.classes}")
 
     if detected_classes != NUM_CLASSES:
         print(f"ERROR: Expected {NUM_CLASSES} classes but found {detected_classes}")
-        print(f"Check your dataset folder structure at: {DATASET_ROOT}")
         exit()
 
     train_size = len(train_dataset)
