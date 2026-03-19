@@ -11,17 +11,13 @@ TongueVision is an AI-driven screening tool designed to address the growing burd
 * **Non-Invasive Screening:** Utilizes tongue imagery as a digital indicator of underlying diabetic conditions.
 * **Hybrid AI Architecture:** Combines **ConvNeXt Tiny** for local feature extraction (texture, fissures) with **Swin Transformers** for global contextual reasoning.
 * **Adaptive Feature Fusion:** Implements a learnable **Attention-Guided Feature Fusion (AGFF)** mechanism that dynamically weights features using spatial and channel attention.
-* **End-to-End Web Platform:** A functional prototype built for automated diabetes risk assessments from user-uploaded images.
 
 ---
 
 ## 🛠️ Tech Stack
 
-* **Frontend:** React, Next.js
 * **Backend:** Python API Server
 * **AI Engine:** PyTorch framework utilizing pre-trained ImageNet weights and mixed-precision training (AMP)
-* **Database:** MongoDB
-
 ---
 
 ## 🧠 System Architecture
