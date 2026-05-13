@@ -24,7 +24,7 @@ def save_filenames_to_txt(folder_path, output_txt_file):
     return image_array
 
 # --- Configuration ---
-base_dir = r"C:\Users\User\Downloads\preprocessedcropped-20240821T085241Z-001 (1)\preprocessedcropped\valid"
+base_dir = r"C:\Users\User\Personal Projects\Final_Segmented_Test_Dataset"
 categories = ["diabetes", "nondiabetes"]
 
 # --- Execution ---

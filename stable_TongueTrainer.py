@@ -12,14 +12,14 @@ from tqdm import tqdm
 # ==============================================================================
 # 1. CONFIGURATION & HYPERPARAMETERS
 # ==============================================================================
-TRAIN_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Train_Dataset"
-VAL_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Val_Dataset"
+TRAIN_DIR = r"C:\Users\User\Personal Projects\Final Combined Dataset\train"
+VAL_DIR = r"C:\Users\User\Personal Projects\Final Combined Dataset\val"
 
 # Hardware & Training Config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 8          # Keep 8 for stability on RTX 3050
 NUM_WORKERS = 2
-LEARNING_RATE = 5e-5    # Lowered slightly for AdamW + Transformer fine-tuning
+LEARNING_RATE = 1e-5    # Lowered slightly for AdamW + Transformer fine-tuning
 WEIGHT_DECAY = 1e-2     # Increased for AdamW to fight overfitting (prev was 1e-4)
 NUM_EPOCHS = 50
 IMAGE_SIZE = 224
@@ -85,41 +85,55 @@ class AGFFBlock(nn.Module):
 class TongueVision(nn.Module):
     def __init__(self, num_classes=2):
         super(TongueVision, self).__init__()
-        print("Initializing TongueVision Model...")
+        print("Initializing TongueVision Model (with frozen backbones)...")
         
+        # ==========================================
         # Branch 1: ConvNeXt Tiny
+        # ==========================================
         base_convnext = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1)
         self.branch1 = create_feature_extractor(base_convnext, return_nodes={'features': 'out'})
         
+        # Freeze ConvNeXt weights
+        for param in self.branch1.parameters():
+            param.requires_grad = False
+            
+        # ==========================================
         # Branch 2: Swin Transformer Tiny
+        # ==========================================
         base_swin = models.swin_t(weights=models.Swin_T_Weights.IMAGENET1K_V1)
         self.branch2 = create_feature_extractor(base_swin, return_nodes={'features': 'out'})
+        
+        # Freeze Swin Transformer weights
+        for param in self.branch2.parameters():
+            param.requires_grad = False
 
-        # Fusion
+        # ==========================================
+        # Fusion & Classification Head
+        # ==========================================
         self.agff = AGFFBlock(in_channels=768)
         
-        # Head with Dropout (Added Improvement)
+        # Head with Increased Dropout to fight overfitting
         self.final_ln = nn.LayerNorm(768)
-        self.dropout = nn.Dropout(p=0.3)  # <--- Added Dropout here
+        self.dropout = nn.Dropout(p=0.5)  # <--- Increased to 50%
         self.classifier = nn.Linear(768, num_classes)
         
     def forward(self, x):
-        # 1. Extract Features
+        # 1. Extract Features (Backbones are frozen, so no gradients tracked here)
         f_conv = self.branch1(x)['out']
         f_swin = self.branch2(x)['out']
         
         # 2. Permute Swin
         f_swin = f_swin.permute(0, 3, 1, 2)
         
-        # 3. Fusion
+        # 3. Fusion (AGFFBlock is trainable)
         f_fused = self.agff(f_conv, f_swin)
         
-        # 4. Classification Head
+        # 4. Classification Head (Trainable)
         f_perm = f_fused.permute(0, 2, 3, 1)
         f_norm = self.final_ln(f_perm).permute(0, 3, 1, 2)
         v = F.adaptive_avg_pool2d(f_norm, (1, 1)).flatten(1)
         
-        v = self.dropout(v) # <--- Apply Dropout
+        v = self.dropout(v) 
         logits = self.classifier(v)
         
         return logits
@@ -128,7 +142,7 @@ class TongueVision(nn.Module):
 # 3. UTILITIES (Early Stopping)
 # ==============================================================================
 class EarlyStopping:
-    def __init__(self, patience=7, min_delta=0, path='TongueVision_Stabilized_v2.pth'):
+    def __init__(self, patience=7, min_delta=0, path='TongueVision_Stabilized_v3.pth'):
         self.patience = patience  # Increased patience to allow scheduler to work
         self.min_delta = min_delta
         self.counter = 0
@@ -177,7 +191,6 @@ if __name__ == "__main__":
     data_transforms = {
         'train': transforms.Compose([
             transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1), # <--- Augmentation
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ]),
@@ -208,8 +221,8 @@ if __name__ == "__main__":
     scheduler_cosine = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS - WARMUP_EPOCHS)
     scheduler = SequentialLR(optimizer, schedulers=[scheduler_warmup, scheduler_cosine], milestones=[WARMUP_EPOCHS])
 
-    criterion = nn.CrossEntropyLoss()
-    early_stopper = EarlyStopping(patience=7, path='TongueVision_Stabilized_v2.pth')
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    early_stopper = EarlyStopping(patience=7, path='TongueVision_Stabilized_v3.pth')
     
     # Mixed Precision Scaler
     scaler = torch.amp.GradScaler('cuda')

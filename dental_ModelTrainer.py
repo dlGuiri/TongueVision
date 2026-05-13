@@ -12,22 +12,22 @@ from tqdm import tqdm
 # ==============================================================================
 # 1. CONFIGURATION & HYPERPARAMETERS
 # ==============================================================================
-TRAIN_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Train_Dataset"
-VAL_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Val_Dataset"
+TRAIN_DIR = r"C:/Users/User/Personal Projects/Dentifycare_dataset/split_dataset/train"
+VAL_DIR = r"C:/Users/User/Personal Projects/Dentifycare_dataset/split_dataset/val"
 
 # Hardware & Training Config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 8          # Keep 8 for stability on RTX 3050
 NUM_WORKERS = 2
 LEARNING_RATE = 5e-5    # Lowered slightly for AdamW + Transformer fine-tuning
-WEIGHT_DECAY = 1e-2     # Increased for AdamW to fight overfitting (prev was 1e-4)
+WEIGHT_DECAY = 0.05     # Increased for AdamW to fight overfitting (prev was 1e-4)
 NUM_EPOCHS = 50
 IMAGE_SIZE = 224
 NUM_CLASSES = 2
 WARMUP_EPOCHS = 5       # Gradual warmup to prevent early instability
 
 # ==============================================================================
-# 2. MODEL ARCHITECTURE (TongueVision)
+# 2. MODEL ARCHITECTURE (DentalLens)
 # ==============================================================================
 class AGFFBlock(nn.Module):
     def __init__(self, in_channels=768):
@@ -82,52 +82,44 @@ class AGFFBlock(nn.Module):
         
         return f_spatial + f_channel
 
-class TongueVision(nn.Module):
+class DentalLens(nn.Module):
     def __init__(self, num_classes=2):
-        super(TongueVision, self).__init__()
-        print("Initializing TongueVision (Dual Swin) Model...")
+        super(DentalLens, self).__init__()
+        print("Initializing DentalLens Model...")
         
-        # --- CHANGE 1: Replace ConvNeXt with Swin Transformer ---
-        # Branch 1: Swin Transformer Tiny (Previously ConvNeXt)
-        base_swin1 = models.swin_t(weights=models.Swin_T_Weights.IMAGENET1K_V1)
-        self.branch1 = create_feature_extractor(base_swin1, return_nodes={'features': 'out'})
+        # Branch 1: ConvNeXt Tiny
+        base_convnext = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1)
+        self.branch1 = create_feature_extractor(base_convnext, return_nodes={'features': 'out'})
         
-        # Branch 2: Swin Transformer Tiny (Kept as is)
-        base_swin2 = models.swin_t(weights=models.Swin_T_Weights.IMAGENET1K_V1)
-        self.branch2 = create_feature_extractor(base_swin2, return_nodes={'features': 'out'})
+        # Branch 2: Swin Transformer Tiny
+        base_swin = models.swin_t(weights=models.Swin_T_Weights.IMAGENET1K_V1)
+        self.branch2 = create_feature_extractor(base_swin, return_nodes={'features': 'out'})
 
         # Fusion
-        # Note: Swin-T outputs 768 channels, so in_channels=768 remains correct
         self.agff = AGFFBlock(in_channels=768)
         
-        # Head
+        # Head with Dropout (Added Improvement)
         self.final_ln = nn.LayerNorm(768)
-        self.dropout = nn.Dropout(p=0.3)
+        self.dropout = nn.Dropout(p=0.5)  # <--- Added Dropout here
         self.classifier = nn.Linear(768, num_classes)
         
     def forward(self, x):
         # 1. Extract Features
-        # Both branches are now Swin Transformers
-        f_swin1 = self.branch1(x)['out']  # Output shape: (B, H, W, 768)
-        f_swin2 = self.branch2(x)['out']  # Output shape: (B, H, W, 768)
+        f_conv = self.branch1(x)['out']
+        f_swin = self.branch2(x)['out']
         
-        # --- CHANGE 2: Permute BOTH branches ---
-        # We need (B, C, H, W) for the AGFFBlock (Conv2d layers)
-        f_swin1 = f_swin1.permute(0, 3, 1, 2) 
-        f_swin2 = f_swin2.permute(0, 3, 1, 2)
+        # 2. Permute Swin
+        f_swin = f_swin.permute(0, 3, 1, 2)
         
         # 3. Fusion
-        # Pass the two transformer features to the fusion block
-        # Note: Inside AGFF, the first arg is usually the "guide", but since both
-        # are identical architectures now, the order matters less.
-        f_fused = self.agff(f_swin1, f_swin2)
+        f_fused = self.agff(f_conv, f_swin)
         
         # 4. Classification Head
         f_perm = f_fused.permute(0, 2, 3, 1)
         f_norm = self.final_ln(f_perm).permute(0, 3, 1, 2)
         v = F.adaptive_avg_pool2d(f_norm, (1, 1)).flatten(1)
         
-        v = self.dropout(v)
+        v = self.dropout(v) # <--- Apply Dropout
         logits = self.classifier(v)
         
         return logits
@@ -136,7 +128,7 @@ class TongueVision(nn.Module):
 # 3. UTILITIES (Early Stopping)
 # ==============================================================================
 class EarlyStopping:
-    def __init__(self, patience=7, min_delta=0, path='DoubleTransformer_TongueVision.pth'):
+    def __init__(self, patience=7, min_delta=0, path='DentalLens_V6.pth'):
         self.patience = patience  # Increased patience to allow scheduler to work
         self.min_delta = min_delta
         self.counter = 0
@@ -201,11 +193,14 @@ if __name__ == "__main__":
 
     print(f"Detected Classes: {train_dataset.classes}")
 
+    NUM_CLASSES = len(train_dataset.classes)
+    print(f"Auto-configured NUM_CLASSES to: {NUM_CLASSES}")
+
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
 
     # --- Initialization ---
-    model = TongueVision(num_classes=NUM_CLASSES).to(DEVICE)
+    model = DentalLens(num_classes=NUM_CLASSES).to(DEVICE)
     
     # IMPROVEMENT: AdamW with higher weight decay
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
@@ -216,8 +211,8 @@ if __name__ == "__main__":
     scheduler_cosine = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS - WARMUP_EPOCHS)
     scheduler = SequentialLR(optimizer, schedulers=[scheduler_warmup, scheduler_cosine], milestones=[WARMUP_EPOCHS])
 
-    criterion = nn.CrossEntropyLoss()
-    early_stopper = EarlyStopping(patience=7, path='DoubleTransformer_TongueVision.pth')
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    early_stopper = EarlyStopping(patience=7, path='DentalLens_V6.pth')
     
     # Mixed Precision Scaler
     scaler = torch.amp.GradScaler('cuda')
@@ -304,5 +299,5 @@ if __name__ == "__main__":
             print("Early stopping triggered.")
             break
 
-    print("\nTraining Complete. Best model saved as 'DoubleTransformer_TongueVision.pth'.")
+    print("\nTraining Complete. Best model saved as 'DentalLens_V6.pth'.")
 

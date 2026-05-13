@@ -12,8 +12,8 @@ from tqdm import tqdm
 # ==============================================================================
 # 1. CONFIGURATION & HYPERPARAMETERS
 # ==============================================================================
-TRAIN_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Train_Dataset"
-VAL_DIR = r"C:\Users\User\Personal Projects\TongueVision\Final_Segmented_Val_Dataset"
+TRAIN_DIR = r"C:\Users\User\Personal Projects\Dataset For TongueVision\train"
+VAL_DIR = r"C:\Users\User\Personal Projects\Dataset For TongueVision\val"
 
 # Hardware & Training Config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -21,7 +21,7 @@ BATCH_SIZE = 8          # Keep 8 for stability on RTX 3050
 NUM_WORKERS = 2
 LEARNING_RATE = 5e-5    # Lowered slightly for AdamW + Transformer fine-tuning
 WEIGHT_DECAY = 1e-2     # Increased for AdamW to fight overfitting (prev was 1e-4)
-NUM_EPOCHS = 50
+NUM_EPOCHS = 25
 IMAGE_SIZE = 224
 NUM_CLASSES = 2
 WARMUP_EPOCHS = 5       # Gradual warmup to prevent early instability
@@ -85,49 +85,41 @@ class AGFFBlock(nn.Module):
 class TongueVision(nn.Module):
     def __init__(self, num_classes=2):
         super(TongueVision, self).__init__()
-        print("Initializing TongueVision (Dual Swin) Model...")
+        print("Initializing TongueVision Model...")
         
-        # --- CHANGE 1: Replace ConvNeXt with Swin Transformer ---
-        # Branch 1: Swin Transformer Tiny (Previously ConvNeXt)
-        base_swin1 = models.swin_t(weights=models.Swin_T_Weights.IMAGENET1K_V1)
-        self.branch1 = create_feature_extractor(base_swin1, return_nodes={'features': 'out'})
+        # Branch 1: ConvNeXt Tiny
+        base_convnext = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1)
+        self.branch1 = create_feature_extractor(base_convnext, return_nodes={'features': 'out'})
         
-        # Branch 2: Swin Transformer Tiny (Kept as is)
-        base_swin2 = models.swin_t(weights=models.Swin_T_Weights.IMAGENET1K_V1)
-        self.branch2 = create_feature_extractor(base_swin2, return_nodes={'features': 'out'})
+        # Branch 2: Swin Transformer Tiny
+        base_swin = models.swin_t(weights=models.Swin_T_Weights.IMAGENET1K_V1)
+        self.branch2 = create_feature_extractor(base_swin, return_nodes={'features': 'out'})
 
         # Fusion
-        # Note: Swin-T outputs 768 channels, so in_channels=768 remains correct
         self.agff = AGFFBlock(in_channels=768)
         
-        # Head
+        # Head with Dropout (Added Improvement)
         self.final_ln = nn.LayerNorm(768)
-        self.dropout = nn.Dropout(p=0.3)
+        self.dropout = nn.Dropout(p=0.5)  # <--- Added Dropout here
         self.classifier = nn.Linear(768, num_classes)
         
     def forward(self, x):
         # 1. Extract Features
-        # Both branches are now Swin Transformers
-        f_swin1 = self.branch1(x)['out']  # Output shape: (B, H, W, 768)
-        f_swin2 = self.branch2(x)['out']  # Output shape: (B, H, W, 768)
+        f_conv = self.branch1(x)['out']
+        f_swin = self.branch2(x)['out']
         
-        # --- CHANGE 2: Permute BOTH branches ---
-        # We need (B, C, H, W) for the AGFFBlock (Conv2d layers)
-        f_swin1 = f_swin1.permute(0, 3, 1, 2) 
-        f_swin2 = f_swin2.permute(0, 3, 1, 2)
+        # 2. Permute Swin
+        f_swin = f_swin.permute(0, 3, 1, 2)
         
         # 3. Fusion
-        # Pass the two transformer features to the fusion block
-        # Note: Inside AGFF, the first arg is usually the "guide", but since both
-        # are identical architectures now, the order matters less.
-        f_fused = self.agff(f_swin1, f_swin2)
+        f_fused = self.agff(f_conv, f_swin)
         
         # 4. Classification Head
         f_perm = f_fused.permute(0, 2, 3, 1)
         f_norm = self.final_ln(f_perm).permute(0, 3, 1, 2)
         v = F.adaptive_avg_pool2d(f_norm, (1, 1)).flatten(1)
         
-        v = self.dropout(v)
+        v = self.dropout(v) # <--- Apply Dropout
         logits = self.classifier(v)
         
         return logits
@@ -136,7 +128,7 @@ class TongueVision(nn.Module):
 # 3. UTILITIES (Early Stopping)
 # ==============================================================================
 class EarlyStopping:
-    def __init__(self, patience=7, min_delta=0, path='DoubleTransformer_TongueVision.pth'):
+    def __init__(self, patience=7, min_delta=0, path='TongueVision_Diabetes_Final_v16.pth'):
         self.patience = patience  # Increased patience to allow scheduler to work
         self.min_delta = min_delta
         self.counter = 0
@@ -165,6 +157,12 @@ class EarlyStopping:
 # ==============================================================================
 # 4. MAIN EXECUTION LOOP
 # ==============================================================================
+def unfreeze_layers(model, keywords):
+    """Unfreezes any layer whose name contains one of the keywords."""
+    for name, param in model.named_parameters():
+        if any(k in name for k in keywords):
+            param.requires_grad = True
+
 if __name__ == "__main__":
     torch.manual_seed(42)
     if torch.cuda.is_available():
@@ -173,7 +171,7 @@ if __name__ == "__main__":
     print(f"Using Device: {DEVICE}")
     print(f"Batch Size: {BATCH_SIZE}")
     
-    # --- Data Loading ---
+    # --- Data Loading (Keep your existing data loading code) ---
     if not os.path.exists(TRAIN_DIR):
         print(f"ERROR: Train path not found: {TRAIN_DIR}")
         exit()
@@ -181,11 +179,9 @@ if __name__ == "__main__":
         print(f"ERROR: Val path not found: {VAL_DIR}")
         exit()
 
-    # Data Transforms (Added ColorJitter for robustness)
     data_transforms = {
         'train': transforms.Compose([
             transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1), # <--- Augmentation
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ]),
@@ -198,35 +194,104 @@ if __name__ == "__main__":
 
     train_dataset = datasets.ImageFolder(TRAIN_DIR, transform=data_transforms['train'])
     val_dataset = datasets.ImageFolder(VAL_DIR, transform=data_transforms['val'])
-
-    print(f"Detected Classes: {train_dataset.classes}")
-
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
 
-    # --- Initialization ---
-    model = TongueVision(num_classes=NUM_CLASSES).to(DEVICE)
+    # ==========================================================================
+    # STEP 2: "THE BRAIN SURGERY" (Architecture Swap)
+    # ==========================================================================
+    print("\nLoading Pre-trained Tongue Expert...")
+    # 1. Initialize model with 21 classes (to match saved weights)
+    model = TongueVision(num_classes=21)
     
-    # IMPROVEMENT: AdamW with higher weight decay
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    # 2. Load your pre-trained weights
+    model.load_state_dict(torch.load('tongue_expert_model.pth', map_location=DEVICE))
     
-    # IMPROVEMENT: Warmup + Cosine Annealing Scheduler
-    # Warmup for first 5 epochs, then Cosine decay for the rest
-    scheduler_warmup = LinearLR(optimizer, start_factor=0.01, total_iters=WARMUP_EPOCHS)
-    scheduler_cosine = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS - WARMUP_EPOCHS)
-    scheduler = SequentialLR(optimizer, schedulers=[scheduler_warmup, scheduler_cosine], milestones=[WARMUP_EPOCHS])
+    # 3. Swap the head: Cut off 21-node layer, attach 2-node layer
+    print("Swapping the classification head for Diabetes Specialization...")
+    model.classifier = nn.Linear(768, NUM_CLASSES)
+    model = model.to(DEVICE)
 
-    criterion = nn.CrossEntropyLoss()
-    early_stopper = EarlyStopping(patience=7, path='DoubleTransformer_TongueVision.pth')
-    
-    # Mixed Precision Scaler
+    # --- Setup Utilities ---
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    early_stopper = EarlyStopping(patience=10, path='TongueVision_Diabetes_Final_v16.pth')
     scaler = torch.amp.GradScaler('cuda')
 
-    # --- Training Loop ---
-    print("\nStarting Stabilized Training...")
+    # ==========================================================================
+    # STEP 3: "DIABETES SPECIALIZATION" (Two-Phase Fine-Tuning)
+    # ==========================================================================
+    print("\nStarting Two-Phase Training...")
     
     for epoch in range(NUM_EPOCHS):
-        # 1. Train
+        
+        # ----------------------------------------------------------------------
+        # PHASE MANAGEMENT (Gradual Unfreezing Schedule)
+        # ----------------------------------------------------------------------
+        if epoch == 0:
+            print("\n=== PHASE A: FREEZE BACKBONE (Head Only) ===")
+            for param in model.parameters():
+                param.requires_grad = False
+                
+            unfreeze_layers(model, ['classifier'])
+            
+            # Initialize optimizer ONCE
+            optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), 
+                                    lr=1e-4, weight_decay=WEIGHT_DECAY)
+            
+            # --- FIX: INITIALIZE SCHEDULER HERE ---
+            # We initialize it at Epoch 0. It will manage whatever is inside the optimizer.
+            scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
+            
+        elif epoch == 5:
+            print("\n=== PHASE B: THAW FUSION MODULE (AGFF + Head) ===")
+            unfreeze_layers(model, ['agff', 'final_ln'])
+            
+            # Extract the newly unfrozen parameters
+            new_params = []
+            for name, param in model.named_parameters():
+                if ('agff' in name or 'final_ln' in name) and param.requires_grad:
+                    new_params.append(param)
+            
+            # Add them to the existing optimizer
+            PHASE_B_LR = 1e-5
+            optimizer.add_param_group({'params': new_params, 'lr': PHASE_B_LR})
+            optimizer.param_groups[0]['lr'] = PHASE_B_LR
+            
+            # Reset the scheduler so it "knows" about the new parameter group
+            # We recreate it here, but it works because we aren't changing the optimizer immediately beforehand
+            scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS - 5, eta_min=1e-6)
+            
+            early_stopper.counter = 0
+            early_stopper.best_loss = None
+        
+        elif epoch == 12:
+            print("\n=== PHASE C: FULL FINE-TUNING (Everything Unfrozen) ===")
+            
+            # 1. Unfreeze the backbone
+            unfreeze_layers(model, ['branch1', 'branch2'])
+            
+            # 2. Extract those newly unfrozen backbone parameters
+            new_params_c = []
+            for name, param in model.named_parameters():
+                if ('branch1' in name or 'branch2' in name) and param.requires_grad:
+                    new_params_c.append(param)
+            
+            PHASE_C_LR = 1e-6
+            
+            # 3. Add the backbone to the existing optimizer
+            optimizer.add_param_group({'params': new_params_c, 'lr': PHASE_C_LR})
+            
+            # 4. Slow down the Head and Fusion blocks so the entire network matches speeds
+            for group in optimizer.param_groups:
+                group['lr'] = PHASE_C_LR
+            
+            # 5. Reset the scheduler for the final stretch
+            scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS - 12, eta_min=1e-7)
+            early_stopper.counter = 0
+            early_stopper.best_loss = None
+        # ----------------------------------------------------------------------
+        # STANDARD TRAINING LOOP
+        # ----------------------------------------------------------------------
         model.train()
         running_loss = 0.0
         correct_train = 0
@@ -238,20 +303,13 @@ if __name__ == "__main__":
             
             optimizer.zero_grad()
             
-            # AMP Forward Pass
             with torch.amp.autocast('cuda'):
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
             
-            # IMPROVEMENT: Gradient Clipping logic
             scaler.scale(loss).backward()
-            
-            # Unscale gradients before clipping!
             scaler.unscale_(optimizer)
-            
-            # Clip gradients to max norm of 1.0 to prevent explosions
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
             scaler.step(optimizer)
             scaler.update()
             
@@ -259,14 +317,14 @@ if __name__ == "__main__":
             _, predicted = torch.max(outputs, 1)
             total_train += labels.size(0)
             correct_train += (predicted == labels).sum().item()
-            
-            # Update progress bar
             train_bar.set_postfix(loss=loss.item())
 
         epoch_loss = running_loss / len(train_dataset)
         epoch_acc = correct_train / total_train
 
-        # 2. Validation
+        # ----------------------------------------------------------------------
+        # VALIDATION LOOP
+        # ----------------------------------------------------------------------
         model.eval()
         val_loss = 0.0
         correct_val = 0
@@ -285,24 +343,19 @@ if __name__ == "__main__":
 
         val_loss = val_loss / len(val_dataset)
         val_acc = correct_val / total_val
-        
-        # Get current LR
         current_lr = optimizer.param_groups[0]['lr']
 
-        # 3. End of Epoch Stats
         print(f"Epoch {epoch+1} Result: "
               f"Train Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} | "
               f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} | "
               f"LR: {current_lr:.2e}")
         
-        # 4. Scheduler Step
+        # --- NEW: STEP THE SCHEDULER HERE ---
         scheduler.step()
-        
-        # 5. Early Stopping Check
+
         early_stopper(val_loss, model)
         if early_stopper.early_stop:
             print("Early stopping triggered.")
             break
 
-    print("\nTraining Complete. Best model saved as 'DoubleTransformer_TongueVision.pth'.")
-
+    print("\nTraining Complete. Best model saved as 'TongueVision_Diabetes_Final_v16.pth'.")

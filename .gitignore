@@ -16,3 +16,7 @@
 /TongueVision_Mendeley_TrainVal
 /TongueVision_Stabilized_v2.pth
 /V1_TongueVision_Stabilized.pth
+*.jpg
+*.png
+*.pth
+*.pkl

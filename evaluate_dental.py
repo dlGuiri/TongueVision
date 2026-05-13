@@ -18,10 +18,11 @@ import numpy as np
 # 1. CONFIGURATION
 # ==============================================================================
 # Point this to the folder containing the 'diabetes' and 'non_diabetes' subfolders
-TEST_DATASET_ROOT = r"C:\Users\User\Personal Projects\Final Combined Dataset\test"
-MODEL_PATH = "TongueVision_Diabetes_Final_v10.pth"  # Ensure this file is in the same directory
+TEST_DATASET_ROOT = r"C:/Users/User/Personal Projects/Dentifycare_dataset/split_dataset/test"
+MODEL_PATH = "DentalLens_V5.pth"  # Ensure this file is in the same directory
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 16
+BATCH_SIZE = 16 
+NUM_CLASSES = 6
 
 # ==============================================================================
 # 2. MODEL ARCHITECTURE (Must match Training Script exactly)
@@ -77,9 +78,9 @@ class AGFFBlock(nn.Module):
         
         return f_spatial + f_channel
 
-class TongueVision(nn.Module):
-    def __init__(self, num_classes=2):
-        super(TongueVision, self).__init__()
+class DentalLens(nn.Module):
+    def __init__(self, num_classes=6):
+        super(DentalLens, self).__init__()
         
         base_convnext = models.convnext_tiny(weights=None) # No weights needed for inference
         self.branch1 = create_feature_extractor(base_convnext, return_nodes={'features': 'out'})
@@ -126,24 +127,28 @@ def evaluate_model():
     test_dataset = datasets.ImageFolder(TEST_DATASET_ROOT, transform=test_transforms)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
 
-    # Class Mapping Check
-    print(f"Class Mapping: {test_dataset.class_to_idx}")
-    target_names = list(test_dataset.class_to_idx.keys())
+    print(f"Detected Classes in Test Set: {test_dataset.classes}")
     
     # 3. Load Model
+    # 3. Load Model
     print("Loading model...")
-    model = TongueVision(num_classes=2).to(DEVICE)
+    # Initialize with 6 classes (matches your training logs)
+    model = DentalLens(num_classes=NUM_CLASSES).to(DEVICE)
+    
     try:
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+        model.load_state_dict(checkpoint)
         print("Weights loaded successfully.")
     except Exception as e:
         print(f"Error loading weights: {e}")
+        print("Tip: If you get a 'size mismatch' error, check if NUM_CLASSES matches your training set (6).")
         return
 
     model.eval()
     
     all_preds = []
     all_labels = []
+    all_probs = []
 
     print("Running Inference...")
     with torch.no_grad():
@@ -151,17 +156,20 @@ def evaluate_model():
             inputs = inputs.to(DEVICE)
             outputs = model(inputs)
             
-            probs = F.softmax(outputs, dim=1) 
-            preds = torch.where(probs[:, 0] > 0.30, 0, 1)
+            # Standard Multi-class prediction
+            probs = F.softmax(outputs, dim=1)
+            _, preds = torch.max(outputs, 1)
             
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.numpy())
+            all_probs.extend(probs.cpu().numpy())
 
     # 4. Metrics
     acc = accuracy_score(all_labels, all_preds)
     print(f"\nTest Set Accuracy: {acc*100:.2f}%")
     
     print("\nClassification Report:")
+    target_names = list(test_dataset.class_to_idx.keys())
     print(classification_report(all_labels, all_preds, target_names=target_names))
 
     # 5. Confusion Matrix
@@ -172,28 +180,9 @@ def evaluate_model():
     plt.xlabel('Predicted')
     plt.ylabel('Actual')
     plt.title('Confusion Matrix')
-    plt.savefig('confusion_matrix.png') 
+    plt.title('Confusion Matrix')
+    plt.savefig('confusion_matrix.png') # <--- ADD THIS
     print("\nConfusion Matrix saved as 'confusion_matrix.png'")
-
-    # ==============================================================================
-    # 6. IDENTIFY MISCLASSIFIED IMAGES
-    # ==============================================================================
-    print("\n--- Misclassified Images ---")
-    
-    # test_dataset.samples contains tuples of (file_path, label_index)
-    image_paths = [sample[0] for sample in test_dataset.samples]
-    
-    wrong_count = 0
-    for i in range(len(all_preds)):
-        if all_preds[i] != all_labels[i]:
-            file_name = os.path.basename(image_paths[i])
-            true_class = target_names[all_labels[i]]
-            pred_class = target_names[all_preds[i]]
-            
-            print(f"File: {file_name} | True: {true_class} | Predicted: {pred_class}")
-            wrong_count += 1
-            
-    print(f"\nTotal misclassified images: {wrong_count} out of {len(all_preds)}")
 
 if __name__ == "__main__":
     evaluate_model()

@@ -1,17 +1,10 @@
 import os
-import re
 
 def clean_dataset(directory_path):
     """
-    Scans a directory for Roboflow-style exported images, keeps one unique 
-    instance per patient/image ID, and removes the augmented duplicates.
+    Scans a directory and keeps ONLY files that contain 'resized' in their filename.
+    All other augmentations (flip, rotate, etc.) are removed.
     """
-    # Regex to capture the base filename before the .rf. tag
-    # Matches: "d_-100-_jpg.rf.5176....jpg" -> Group 1: "d_-100-_jpg"
-    pattern = re.compile(r"^(.*?)\.rf\.[a-f0-9]+\.(jpg|jpeg|png|bmp|tif)$", re.IGNORECASE)
-    
-    # Track the unique base names we have already processed
-    seen_bases = set()
     deleted_count = 0
     kept_count = 0
 
@@ -25,15 +18,13 @@ def clean_dataset(directory_path):
     # Walk through the directory
     for root, dirs, files in os.walk(directory_path):
         for filename in files:
-            match = pattern.match(filename)
-            
-            # Only process files that match the Roboflow .rf. pattern
-            if match:
-                base_name = match.group(1)
+            # We'll stick to checking standard image extensions just to be safe
+            if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tif')):
                 file_path = os.path.join(root, filename)
 
-                if base_name in seen_bases:
-                    # We have already seen this base name, so this is a duplicate/augmentation
+                # Check if 'resized' is missing from the filename
+                if "resized" not in filename.lower():
+                    # It's a flip, rotate, or other augmentation -> delete it
                     try:
                         os.remove(file_path)
                         deleted_count += 1
@@ -42,18 +33,17 @@ def clean_dataset(directory_path):
                     except OSError as e:
                         print(f"Error deleting {filename}: {e}")
                 else:
-                    # This is the first time we see this base name; keep it
-                    seen_bases.add(base_name)
+                    # It has 'resized' in the name -> keep it
                     kept_count += 1
 
     print("-" * 30)
     print("Cleanup Complete.")
-    print(f"Unique images preserved: {kept_count}")
+    print(f"Resized images preserved: {kept_count}")
     print(f"Augmented duplicates removed: {deleted_count}")
 
 # --- EXECUTION ---
 # strict usage of raw string (r"...") for Windows paths to handle backslashes
-dataset_path = r"C:\Users\User\Downloads\Kaggle_Cleaned_Dataset"
+dataset_path = r"C:\Users\User\OneDrive\Documents\Final_Segmented_Train_Dataset\nondiabetes"
 
 # Run the function
 clean_dataset(dataset_path)

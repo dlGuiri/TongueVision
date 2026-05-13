@@ -19,10 +19,11 @@ import numpy as np
 # ==============================================================================
 # Point this to the folder containing the 'diabetes' and 'non_diabetes' subfolders
 TEST_DATASET_ROOT = r"C:\Users\User\Personal Projects\Final Combined Dataset\test"
-MODEL_PATH = "TongueVision_Diabetes_Final_v10.pth"  # Ensure this file is in the same directory
+MODEL_PATH = "TongueVision_Diabetes_Final_v6.pth"  # Ensure this file is in the same directory
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 16
-
+BATCH_SIZE = 16 
+# TongueVision_Stabilized_v2.pth
+# TongueVision.pth
 # ==============================================================================
 # 2. MODEL ARCHITECTURE (Must match Training Script exactly)
 # ==============================================================================
@@ -111,14 +112,22 @@ class TongueVision(nn.Module):
 def evaluate_model():
     print(f"Device: {DEVICE}")
     
-    # 1. Transforms (Must match training exactly)
+    # 1. Base Transform
     test_transforms = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-    # 2. Load Data
+    # 2. Define TTA Augmentations
+    # These are performed on the Tensors to keep it fast
+    tta_transforms = [
+        lambda x: x,                              # 1. Original
+        lambda x: torch.flip(x, dims=[3]),        # 2. Horizontal Flip
+        lambda x: torch.flip(x, dims=[2]),        # 3. Vertical Flip
+    ]
+
+    # 3. Load Data
     if not os.path.exists(TEST_DATASET_ROOT):
         print(f"Error: Path not found: {TEST_DATASET_ROOT}")
         return
@@ -126,42 +135,50 @@ def evaluate_model():
     test_dataset = datasets.ImageFolder(TEST_DATASET_ROOT, transform=test_transforms)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
 
-    # Class Mapping Check
     print(f"Class Mapping: {test_dataset.class_to_idx}")
-    target_names = list(test_dataset.class_to_idx.keys())
     
-    # 3. Load Model
     print("Loading model...")
     model = TongueVision(num_classes=2).to(DEVICE)
-    try:
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-        print("Weights loaded successfully.")
-    except Exception as e:
-        print(f"Error loading weights: {e}")
-        return
-
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
     
     all_preds = []
     all_labels = []
 
-    print("Running Inference...")
+    print(f"Running Inference with {len(tta_transforms)}x TTA...")
     with torch.no_grad():
         for inputs, labels in tqdm(test_loader):
             inputs = inputs.to(DEVICE)
-            outputs = model(inputs)
             
-            probs = F.softmax(outputs, dim=1) 
-            preds = torch.where(probs[:, 0] > 0.30, 0, 1)
+            # --- START TTA LOOP ---
+            batch_probs = []
+            for tta_transform in tta_transforms:
+                # Apply the flip/transform to the current batch
+                tta_inputs = tta_transform(inputs)
+                
+                # Get logits and convert to probabilities
+                outputs = model(tta_inputs)
+                probs = F.softmax(outputs, dim=1)
+                batch_probs.append(probs)
+            
+            # Average the probabilities across all TTA views
+            # (Stack then mean across the new dimension)
+            avg_probs = torch.stack(batch_probs).mean(dim=0)
+            # --- END TTA LOOP ---
+
+            # Apply your specific 0.65 Diabetes threshold to the averaged probability
+            # Class 0 is Diabetes.
+            preds = torch.where(avg_probs[:, 0] > 0.10, 0, 1)
             
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.numpy())
 
     # 4. Metrics
     acc = accuracy_score(all_labels, all_preds)
-    print(f"\nTest Set Accuracy: {acc*100:.2f}%")
+    print(f"\nTest Set Accuracy (with TTA): {acc*100:.2f}%")
     
     print("\nClassification Report:")
+    target_names = list(test_dataset.class_to_idx.keys())
     print(classification_report(all_labels, all_preds, target_names=target_names))
 
     # 5. Confusion Matrix
@@ -171,29 +188,9 @@ def evaluate_model():
                 xticklabels=target_names, yticklabels=target_names)
     plt.xlabel('Predicted')
     plt.ylabel('Actual')
-    plt.title('Confusion Matrix')
-    plt.savefig('confusion_matrix.png') 
-    print("\nConfusion Matrix saved as 'confusion_matrix.png'")
-
-    # ==============================================================================
-    # 6. IDENTIFY MISCLASSIFIED IMAGES
-    # ==============================================================================
-    print("\n--- Misclassified Images ---")
-    
-    # test_dataset.samples contains tuples of (file_path, label_index)
-    image_paths = [sample[0] for sample in test_dataset.samples]
-    
-    wrong_count = 0
-    for i in range(len(all_preds)):
-        if all_preds[i] != all_labels[i]:
-            file_name = os.path.basename(image_paths[i])
-            true_class = target_names[all_labels[i]]
-            pred_class = target_names[all_preds[i]]
-            
-            print(f"File: {file_name} | True: {true_class} | Predicted: {pred_class}")
-            wrong_count += 1
-            
-    print(f"\nTotal misclassified images: {wrong_count} out of {len(all_preds)}")
+    plt.title(f'Confusion Matrix (TTA Accuracy: {acc*100:.2f}%)')
+    plt.savefig('confusion_matrix_tta.png') 
+    print("\nConfusion Matrix saved as 'confusion_matrix_tta.png'")
 
 if __name__ == "__main__":
     evaluate_model()
