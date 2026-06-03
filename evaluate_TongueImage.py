@@ -18,7 +18,7 @@ from skimage.segmentation import mark_boundaries
 # 1. CONFIGURATION
 # ==============================================================================
 # Point this directly to the image file you want to test
-IMAGE_PATH = r"C:\Users\User\Downloads\real_tongue.jpg"
+IMAGE_PATH = r"C:\Users\User\Downloads\download.jpg"
 MODEL_PATH = "TongueVision_Diabetes_Final_v10.pth"  # Ensure this file is in the same directory
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

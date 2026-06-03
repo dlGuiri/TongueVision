@@ -19,7 +19,7 @@ import numpy as np
 # ==============================================================================
 # Point this to the folder containing the 'diabetes' and 'non_diabetes' subfolders
 TEST_DATASET_ROOT = r"C:\Users\User\Personal Projects\Final Combined Dataset\test"
-MODEL_PATH = "TongueVision_Diabetes_Final_v10.pth"  # Ensure this file is in the same directory
+MODEL_PATH = "TongueVision_Diabetes_Final_v11.pth"  # Ensure this file is in the same directory
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 16
 

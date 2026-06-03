@@ -13,7 +13,7 @@ from tqdm import tqdm
 # 1. CONFIGURATION & HYPERPARAMETERS
 # ==============================================================================
 TRAIN_DIR = r"C:\Users\User\Personal Projects\Final Combined Dataset\train"
-VAL_DIR = r"C:\Users\User\Personal Projects\Dataset For TongueVision\val"
+VAL_DIR = r"C:\Users\User\Personal Projects\Final Combined Dataset\val"
 
 # Hardware & Training Config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

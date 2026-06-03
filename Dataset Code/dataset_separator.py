@@ -65,4 +65,4 @@ destination_path = r"C:\Users\User\Personal Projects\Dataset For TongueVision"
 random.seed(42)
 
 # Run the function
-create_split(source_path, destination_path, val_size=25, test_size=50)
+create_split(source_path, destination_path, val_size=50, test_size=100)
